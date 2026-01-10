@@ -39,6 +39,7 @@
         <module>hive</module>
         <module>presto</module>
         <module>firebird</module>
+        <module>rewriter</module>
     </modules>
     
     <dependencies>

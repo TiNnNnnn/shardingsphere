@@ -33,6 +33,29 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Calcite dependencies -->
+        <dependency>
+            <groupId>org.apache.calcite</groupId>
+            <artifactId>calcite-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- SQL Federation Compiler for template conversion -->
+        <dependency>
+            <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-sql-federation-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- Rewriter Parser for parsing rewrite rules -->
+        <dependency>
+            <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-parser-sql-engine-rewiter</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.shardingsphere</groupId>
             <artifactId>shardingsphere-single-core</artifactId>
