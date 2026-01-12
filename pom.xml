@@ -47,6 +47,8 @@
         <module>test</module>
         
         <module>distribution</module>
+
+        <module>rewriter-poc</module>
     </modules>
     
     <properties>

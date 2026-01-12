@@ -32,6 +32,7 @@ import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.Cons
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintType;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.RewriteRuleSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateExpressionSegment;
+import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateFilterSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateInSubFilterSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateJoinSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateProjectionSegment;
@@ -99,13 +100,14 @@ public final class RewriterStatementVisitor extends RewriterStatementBaseVisitor
 
     @Override
     public ASTNode visitFilterTemplate(final RewriterStatementParser.FilterTemplateContext ctx) {
-        // Filter<p0 a0>(child) -> WhereSegment
+        // Filter<p0 a0>(child) -> TemplateFilterSegment
         String predicateId = ctx.IDENTIFIER(0).getText();
         String attrId = ctx.IDENTIFIER(1).getText();
 
-        // Create a placeholder expression for the filter predicate
-        ExpressionSegment expr = new TemplateExpressionSegment(predicateId, attrId);
-        return new WhereSegment(0, 0, expr);
+        // 递归访问子节点（可能是表、另一个Filter等）
+        ASTNode child = visit(ctx.template());
+
+        return new TemplateFilterSegment(predicateId, attrId, child);
     }
 
     @Override

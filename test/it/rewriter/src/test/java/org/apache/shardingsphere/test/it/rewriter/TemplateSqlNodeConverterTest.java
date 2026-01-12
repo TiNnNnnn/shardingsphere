@@ -330,5 +330,154 @@ public class TemplateSqlNodeConverterTest {
         System.out.println("- Complete SELECT query returned (can be used as subnode)");
         System.out.println("- All tables and attributes preserved");
     }
-}
 
+    @Test
+    public void testInSubFilterAsSubnode() {
+        // 测试InSubFilter作为子节点：嵌套的InSubFilter
+        // InSubFilter<a1>(InSubFilter<a0>(Input<t0>,Input<t1>),Input<t2>)
+        // 表示：先对t0进行半连接过滤（基于t1），然后对结果再进行半连接过滤（基于t2）
+        String rule = "InSubFilter<a1>(InSubFilter<a0>(Input<t0>,Input<t1>),Input<t2>)|"
+                + "InSubFilter<a3>(InSubFilter<a2>(Input<t3>,Input<t4>),Input<t5>)|"
+                + "TableEq(t0,t3);TableEq(t1,t4);TableEq(t2,t5);AttrsEq(a0,a2);AttrsEq(a1,a3)";
+
+        RewriterStatementVisitorFacade facade = new RewriterStatementVisitorFacade();
+        ASTNode astNode = facade.parseRule(rule);
+        RewriteRuleSegment ruleSegment = (RewriteRuleSegment) astNode;
+
+        TemplateRewriteRule templateRule = TemplateSqlNodeConverter.convert(ruleSegment);
+        String sourceSQL = templateRule.getSourceTemplate().toSqlString(dialect).getSql();
+        String targetSQL = templateRule.getTargetTemplate().toSqlString(dialect).getSql();
+
+        System.out.println("=== Nested InSubFilter Test ===");
+        System.out.println("Source SQL: " + sourceSQL);
+        System.out.println("Target SQL: " + targetSQL);
+
+        // 验证嵌套结构：应该包含两次IN子查询
+        int inCount = sourceSQL.toUpperCase().split("\\bIN\\b").length - 1;
+        assertTrue(inCount >= 2, "Nested InSubFilter should have at least 2 IN keywords, found: " + inCount);
+
+        // 验证包含所有三个表
+        assertTrue(sourceSQL.contains("t0"), "Source should contain main table t0");
+        assertTrue(sourceSQL.contains("t1"), "Source should contain first subquery table t1");
+        assertTrue(sourceSQL.contains("t2"), "Source should contain second subquery table t2");
+
+        // 验证包含所有属性
+        assertTrue(sourceSQL.contains("a0"), "Source should contain attribute a0");
+        assertTrue(sourceSQL.contains("a1"), "Source should contain attribute a1");
+
+        // 验证目标SQL
+        assertTrue(targetSQL.contains("t3"), "Target should contain main table t3");
+        assertTrue(targetSQL.contains("t4"), "Target should contain first subquery table t4");
+        assertTrue(targetSQL.contains("t5"), "Target should contain second subquery table t5");
+        assertTrue(targetSQL.contains("a2"), "Target should contain attribute a2");
+        assertTrue(targetSQL.contains("a3"), "Target should contain attribute a3");
+
+        // 验证约束数量
+        assertEquals(5, templateRule.getConstraints().size(), "Should have 5 constraints");
+
+        System.out.println("Nested InSubFilter test passed!");
+        System.out.println("- InSubFilter used as subnode (nested)");
+        System.out.println("- Contains " + inCount + " IN operations");
+        System.out.println("- Structure: SELECT * FROM (SELECT * FROM t0 WHERE a0 IN ...) WHERE a1 IN ...");
+    }
+
+    @Test
+    public void testInSubFilterWrappedByProjection() {
+        // 测试InSubFilter被Projection包装的情况
+        // Proj<a0>(InSubFilter<a1>(Input<t0>,Input<t1>))
+        // 表示：对半连接过滤的结果进行投影
+        String rule = "Proj<a0>(InSubFilter<a1>(Input<t0>,Input<t1>))|"
+                + "Proj<a2>(InSubFilter<a3>(Input<t2>,Input<t3>))|"
+                + "TableEq(t0,t2);TableEq(t1,t3);AttrsEq(a0,a2);AttrsEq(a1,a3)";
+
+        RewriterStatementVisitorFacade facade = new RewriterStatementVisitorFacade();
+        ASTNode astNode = facade.parseRule(rule);
+        RewriteRuleSegment ruleSegment = (RewriteRuleSegment) astNode;
+
+        TemplateRewriteRule templateRule = TemplateSqlNodeConverter.convert(ruleSegment);
+        String sourceSQL = templateRule.getSourceTemplate().toSqlString(dialect).getSql();
+        String targetSQL = templateRule.getTargetTemplate().toSqlString(dialect).getSql();
+
+        System.out.println("=== InSubFilter Wrapped by Projection Test ===");
+        System.out.println("Source SQL: " + sourceSQL);
+        System.out.println("Target SQL: " + targetSQL);
+
+        // 验证包含SELECT和IN
+        assertTrue(sourceSQL.contains("SELECT"), "Source should contain SELECT");
+        assertTrue(sourceSQL.toUpperCase().contains("IN"), "Source should contain IN keyword");
+
+        // 验证投影属性a0出现在外层SELECT中
+        assertTrue(sourceSQL.contains("a0"), "Source should contain projection attribute a0");
+
+        // 验证过滤属性a1出现在IN条件中
+        assertTrue(sourceSQL.contains("a1"), "Source should contain filter attribute a1");
+
+        // 验证包含所有表
+        assertTrue(sourceSQL.contains("t0"), "Source should contain main table t0");
+        assertTrue(sourceSQL.contains("t1"), "Source should contain subquery table t1");
+
+        // 验证目标SQL
+        assertTrue(targetSQL.contains("a2"), "Target should contain projection attribute a2");
+        assertTrue(targetSQL.contains("a3"), "Target should contain filter attribute a3");
+        assertTrue(targetSQL.contains("t2"), "Target should contain main table t2");
+        assertTrue(targetSQL.contains("t3"), "Target should contain subquery table t3");
+
+        // 验证约束数量
+        assertEquals(4, templateRule.getConstraints().size(), "Should have 4 constraints");
+
+        System.out.println("InSubFilter wrapped by Projection test passed!");
+        System.out.println("- InSubFilter used as subnode (wrapped by Proj)");
+        System.out.println("- Structure: SELECT a0 FROM (SELECT * FROM t0 WHERE a1 IN ...)");
+    }
+
+    @Test
+    public void testNestedFilterRule() {
+        // 测试嵌套的Filter规则
+        // Filter<p1 a1>(Filter<p0 a0>(Input<t0>)) | Filter<p2 a2>(Input<t1>) | constraints
+        // 表示：先对t0应用谓词p0(a0)，再对结果应用谓词p1(a1)
+        // 目标：对t1应用谓词p2(a2)
+        String rule = "Filter<p1 a1>(Filter<p0 a0>(Input<t0>))|Filter<p2 a2>(Input<t1>)|"
+                + "AttrsEq(a0,a1);PredicateEq(p0,p1);AttrsSub(a0,t0);AttrsSub(a1,t0);TableEq(t1,t0);AttrsEq(a2,a0);PredicateEq(p2,p0)";
+
+        RewriterStatementVisitorFacade facade = new RewriterStatementVisitorFacade();
+        ASTNode astNode = facade.parseRule(rule);
+        RewriteRuleSegment ruleSegment = (RewriteRuleSegment) astNode;
+
+        TemplateRewriteRule templateRule = TemplateSqlNodeConverter.convert(ruleSegment);
+        String sourceSQL = templateRule.getSourceTemplate().toSqlString(dialect).getSql();
+        String targetSQL = templateRule.getTargetTemplate().toSqlString(dialect).getSql();
+
+        System.out.println("=== Nested Filter Test ===");
+        System.out.println("Source SQL: " + sourceSQL);
+        System.out.println("Target SQL: " + targetSQL);
+
+        // 验证包含SELECT和WHERE
+        assertTrue(sourceSQL.contains("SELECT"), "Source should contain SELECT");
+        assertTrue(sourceSQL.toUpperCase().contains("WHERE"), "Source should contain WHERE clause");
+
+        // 验证包含谓词函数调用 p0(a0) 和 p1(a1)
+        assertTrue(sourceSQL.contains("p0"), "Source should contain predicate function p0");
+        assertTrue(sourceSQL.contains("a0"), "Source should contain attribute a0");
+        assertTrue(sourceSQL.contains("p1"), "Source should contain predicate function p1");
+        assertTrue(sourceSQL.contains("a1"), "Source should contain attribute a1");
+
+        // 验证包含表t0
+        assertTrue(sourceSQL.contains("t0"), "Source should contain table t0");
+
+        // 验证目标SQL
+        assertTrue(targetSQL.contains("SELECT"), "Target should contain SELECT");
+        assertTrue(targetSQL.toUpperCase().contains("WHERE"), "Target should contain WHERE clause");
+        assertTrue(targetSQL.contains("p2"), "Target should contain predicate function p2");
+        assertTrue(targetSQL.contains("a2"), "Target should contain attribute a2");
+        assertTrue(targetSQL.contains("t1"), "Target should contain table t1");
+
+        // 验证约束数量
+        assertEquals(7, templateRule.getConstraints().size(), "Should have 7 constraints");
+
+        System.out.println("Nested Filter test passed!");
+        System.out.println("- Nested filter structure: Filter<p1 a1>(Filter<p0 a0>(Input<t0>))");
+        System.out.println("- Predicates represented as functions: p0(a0), p1(a1), p2(a2)");
+        System.out.println("- Constraints: AttrsEq, PredicateEq, AttrsSub, TableEq");
+        System.out.println("- Structure: SELECT * FROM t0 WHERE p0(a0) AND p1(a1)");
+    }
+}

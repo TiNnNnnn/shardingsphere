@@ -38,6 +38,7 @@ import org.apache.shardingsphere.sql.parser.statement.core.segment.generic.table
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.RewriteRuleSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateExpressionSegment;
+import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateFilterSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateInSubFilterSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateJoinSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateProjectionSegment;
@@ -93,8 +94,8 @@ public final class TemplateSqlNodeConverter {
         if (template instanceof TemplateInSubFilterSegment) {
             return convertInSubFilterTemplate((TemplateInSubFilterSegment) template);
         }
-        if (template instanceof WhereSegment) {
-            return convertFilterTemplate((WhereSegment) template);
+        if (template instanceof TemplateFilterSegment) {
+            return convertFilterSegmentTemplate((TemplateFilterSegment) template);
         }
         throw new UnsupportedOperationException("Unsupported template type: " + template.getClass().getName());
     }
@@ -109,17 +110,10 @@ public final class TemplateSqlNodeConverter {
                 if (projSegment instanceof ColumnProjectionSegment) {
                     ColumnSegment column = ((ColumnProjectionSegment) projSegment).getColumn();
                     String columnName = column.getIdentifier().getValue();
-
-                    // 判断是否为模板变量（以'a'或's'开头+数字）
                     boolean isTemplate = columnName.matches("[as]\\d+");
-
-                    // schema参数（s开头）不应该出现在SELECT列表中，只有属性（a开头）才出现
-                    // 例如：Proj<a0 s0> 应该生成 SELECT a0，而不是 SELECT a0, s0
                     if (columnName.startsWith("s") && isTemplate) {
-                        // 跳过schema参数
                         continue;
                     }
-
                     TemplateSqlIdentifier.TemplateVarType varType = columnName.startsWith("a")
                             ? TemplateSqlIdentifier.TemplateVarType.ATTRIBUTE
                             : TemplateSqlIdentifier.TemplateVarType.SCHEMA;
@@ -128,19 +122,18 @@ public final class TemplateSqlNodeConverter {
                 }
             }
         } else {
-            // Proj* 表示 SELECT *
             selectList.add(SqlIdentifier.star(POS));
         }
 
-        // 递归转换子模板（FROM子句）
-        SqlNode from = convertTemplate(segment.getChild());
+        SqlNode child = convertTemplate(segment.getChild());
+        if (child instanceof SqlJoin || child instanceof SqlSelect )
 
         return new SqlSelect(
                 POS,
                 null,              // keywordList
                 selectList,        // selectList
-                from,              // from
-                null,              // where
+                null,              // from
+                null,             // where
                 null,              // groupBy
                 null,              // having
                 null,              // windowDecls
@@ -154,9 +147,7 @@ public final class TemplateSqlNodeConverter {
     private static SqlNode convertSimpleTable(final SimpleTableSegment segment) {
         String tableName = segment.getTableName().getIdentifier().getValue();
 
-        // 判断是否为模板变量（以't'开头+数字）
         boolean isTemplate = tableName.matches("t\\d+");
-
         return new TemplateSqlIdentifier(
                 tableName,
                 isTemplate,
@@ -189,16 +180,10 @@ public final class TemplateSqlNodeConverter {
         // InSubFilter<a>(R_left, R_right) 实现半连接语义：
         // 保留R_left中那些在R_right中存在的元组（基于属性a的值检查）
         // 转换为: SELECT * FROM R_left WHERE a IN (SELECT ... FROM R_right)
-
-        // 1. 转换左子节点（主查询的输入）
         SqlNode fromClause = convertTemplate(segment.getLeftChild());
-
-        // 2. 转换右子节点（子查询）
         SqlNode subqueryNode = convertTemplate(segment.getSubquery());
-
-        // 3. 创建IN条件: a IN (subquery)
         String attribute = segment.getAttribute();
-        SqlIdentifier attrIdentifier = new SqlIdentifier(attribute, POS);
+        TemplateSqlIdentifier attrIdentifier = new TemplateSqlIdentifier(attribute, true, TemplateSqlIdentifier.TemplateVarType.ATTRIBUTE);
         SqlNode inCondition = SqlStdOperatorTable.IN.createCall(POS, attrIdentifier, subqueryNode);
 
         // 4. 构建完整的半连接查询: SELECT * FROM R_left WHERE a IN (R_right)
@@ -207,7 +192,7 @@ public final class TemplateSqlNodeConverter {
 
         return new SqlSelect(
                 POS,
-                null,              // keywordList
+                null,  // keywordList
                 selectList,        // SELECT *
                 fromClause,        // FROM R_left
                 inCondition,       // WHERE a IN (subquery)
@@ -224,8 +209,10 @@ public final class TemplateSqlNodeConverter {
     private static SqlNode createJoinCondition(final TemplateJoinSegment segment) {
         String leftAttribute = segment.getLeftAttribute();
         String rightAttribute = segment.getRightAttribute();
-        SqlIdentifier leftColumn = new SqlIdentifier(leftAttribute, POS);
-        SqlIdentifier rightColumn = new SqlIdentifier(rightAttribute, POS);
+
+        TemplateSqlIdentifier leftColumn = new TemplateSqlIdentifier(leftAttribute, true, TemplateSqlIdentifier.TemplateVarType.ATTRIBUTE);
+        TemplateSqlIdentifier rightColumn = new TemplateSqlIdentifier(rightAttribute, true, TemplateSqlIdentifier.TemplateVarType.ATTRIBUTE);
+
         return SqlStdOperatorTable.EQUALS.createCall(POS, leftColumn, rightColumn);
     }
 
@@ -244,21 +231,70 @@ public final class TemplateSqlNodeConverter {
         }
     }
 
+    /**
+     * Convert TemplateFilterSegment - public entry that returns complete SELECT.
+     * Used when Filter is at the root level.
+     */
+    private static SqlNode convertFilterSegmentTemplate(final TemplateFilterSegment segment) {
+        SqlNode childNode = convertTemplate(segment.getChild());
+        return null;
+    }
+
+    /**
+     * Create filter condition as function call: p(a).
+     */
+    private static SqlNode createFilterCondition(final String predicateName, final String attributeName) {
+        SqlIdentifier predicateFunction = new TemplateSqlIdentifier(
+                predicateName,
+                true,
+                TemplateSqlIdentifier.TemplateVarType.PREDICATE
+        );
+
+        SqlIdentifier attrArg = new TemplateSqlIdentifier(
+                attributeName,
+                true,
+                TemplateSqlIdentifier.TemplateVarType.ATTRIBUTE
+        );
+
+        return new org.apache.calcite.sql.SqlBasicCall(
+                new org.apache.calcite.sql.SqlUnresolvedFunction(
+                        predicateFunction,
+                        null, null, null, null,
+                        org.apache.calcite.sql.SqlFunctionCategory.USER_DEFINED_FUNCTION
+                ),
+                new SqlNode[]{attrArg},
+                POS
+        );
+    }
+
     private static SqlNode convertFilterTemplate(final WhereSegment segment) {
         if (segment.getExpr() instanceof TemplateExpressionSegment) {
             TemplateExpressionSegment exprSeg = (TemplateExpressionSegment) segment.getExpr();
-            SqlIdentifier predicateId = new TemplateSqlIdentifier(
-                    exprSeg.getOperator(),
+            String predicateName = exprSeg.getOperator();
+            String attributeName = exprSeg.getAttribute();
+            SqlIdentifier predicateFunction = new TemplateSqlIdentifier(
+                    predicateName,
                     true,
                     TemplateSqlIdentifier.TemplateVarType.PREDICATE
             );
-
-            SqlIdentifier attrId = new TemplateSqlIdentifier(
-                    exprSeg.getAttribute(),
+            SqlIdentifier attrArg = new TemplateSqlIdentifier(
+                    attributeName,
                     true,
                     TemplateSqlIdentifier.TemplateVarType.ATTRIBUTE
             );
-            return SqlStdOperatorTable.EQUALS.createCall(POS, predicateId, attrId);
+
+            return new org.apache.calcite.sql.SqlBasicCall(
+                    new org.apache.calcite.sql.SqlUnresolvedFunction(
+                            predicateFunction,
+                            null,
+                            null,
+                            null,
+                            null,
+                            org.apache.calcite.sql.SqlFunctionCategory.USER_DEFINED_FUNCTION
+                    ),
+                    new SqlNode[]{attrArg},
+                    POS
+            );
         }
         return SqlLiteral.createBoolean(true, POS);
     }

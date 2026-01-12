@@ -38,6 +38,13 @@
             <version>${project.version}</version>
         </dependency>
         
+        <!-- Add dependency for rewrite rule parser -->
+        <dependency>
+            <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-parser-sql-engine-rewiter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.shardingsphere</groupId>
             <artifactId>shardingsphere-test-infra-fixture-database</artifactId>
@@ -56,6 +63,12 @@
             <artifactId>shardingsphere-database-connector-mysql</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.shardingsphere</groupId>
+            <artifactId>shardingsphere-parser-sql-engine-rewiter</artifactId>
+            <version>5.5.3-SNAPSHOT</version>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
     
