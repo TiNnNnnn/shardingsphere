@@ -19,22 +19,36 @@ package org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
-import org.apache.calcite.sql.SqlNode;
-import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
+import org.apache.calcite.rel.RelNode;
+import org.apache.shardingsphere.sql.parser.api.ASTNode;
 
 import java.util.Collection;
 
 /**
- * Template rewrite rule containing source/target SQL nodes and constraints.
+ * Template rewrite rule using RelNode (instead of SqlNode).
+ *
+ * This is simpler than SqlNode-based approach because:
+ * - No SQL validation needed
+ * - No virtual schema needed
+ * - Direct RelNode manipulation
  */
 @RequiredArgsConstructor
 @Getter
-public final class TemplateRewriteRule {
+public final class TemplateRelNodeRule {
 
-    private final SqlNode sourceTemplate;
+    /**
+     * Source template as RelNode.
+     */
+    private final RelNode sourceTemplate;
 
-    private final SqlNode targetTemplate;
+    /**
+     * Target template as RelNode.
+     */
+    private final RelNode targetTemplate;
 
-    private final Collection<ConstraintSegment> constraints;
+    /**
+     * Constraints for the rewrite rule.
+     */
+    private final Collection<? extends ASTNode> constraints;
 }
 

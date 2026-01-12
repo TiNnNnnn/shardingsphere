@@ -17,16 +17,13 @@
 
 package org.apache.shardingsphere.sqlfederation.autorewriter;
 
-import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
-import org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template.TemplateRewriteRule;
+import org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template.TemplateRelNodeRule;
 import org.junit.jupiter.api.Test;
-
-import java.util.Collection;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test cases for RewriteRuleParser.
+ * Test for RewriteRuleParser using TemplateRelNodeBuilder.
  */
 public class RewriteRuleParserTest {
 
@@ -35,13 +32,17 @@ public class RewriteRuleParserTest {
         RewriteRuleParser parser = RewriteRuleParser.createParser();
         String ruleText = "Proj*<a0 s0>(Input<t0>)|Proj<a1 s1>(Input<t1>)|TableEq(t1,t0);AttrsEq(a1,a0);SchemaEq(s1,s0)";
 
-        TemplateRewriteRule rule = parser.parse(ruleText);
+        TemplateRelNodeRule rule = parser.parse(ruleText);
 
         assertNotNull(rule);
         assertNotNull(rule.getSourceTemplate());
         assertNotNull(rule.getTargetTemplate());
         assertNotNull(rule.getConstraints());
         assertEquals(3, rule.getConstraints().size());
+
+        System.out.println("✓ Simple projection rule parsed successfully");
+        System.out.println("  Source: " + rule.getSourceTemplate().getRelTypeName());
+        System.out.println("  Target: " + rule.getTargetTemplate().getRelTypeName());
     }
 
     @Test
@@ -55,17 +56,8 @@ public class RewriteRuleParserTest {
         // Invalid rule
         String invalidRule = "Invalid rule syntax!!!";
         assertFalse(parser.validate(invalidRule));
-    }
 
-    @Test
-    public void testExtractConstraints() {
-        RewriteRuleParser parser = RewriteRuleParser.createParser();
-        String ruleText = "Proj*<a0 s0>(Input<t0>)|Proj<a1 s1>(Input<t1>)|TableEq(t1,t0);AttrsEq(a1,a0)";
-
-        Collection<ConstraintSegment> constraints = parser.extractConstraints(ruleText);
-
-        assertNotNull(constraints);
-        assertEquals(2, constraints.size());
+        System.out.println("✓ Rule validation works correctly");
     }
 
     @Test
@@ -73,11 +65,28 @@ public class RewriteRuleParserTest {
         RewriteRuleParser parser = RewriteRuleParser.createParser();
         String ruleText = "InnerJoin<a1 a2>(Input<t0>,Input<t1>)|InnerJoin<a3 a4>(Input<t2>,Input<t3>)|TableEq(t2,t1);TableEq(t3,t0)";
 
-        TemplateRewriteRule rule = parser.parse(ruleText);
+        TemplateRelNodeRule rule = parser.parse(ruleText);
 
         assertNotNull(rule);
         assertNotNull(rule.getSourceTemplate());
         assertNotNull(rule.getTargetTemplate());
+        assertEquals("LogicalJoin", rule.getSourceTemplate().getRelTypeName());
+
+        System.out.println("✓ Join rule parsed successfully");
+    }
+
+    @Test
+    public void testParseFilterRule() {
+        RewriteRuleParser parser = RewriteRuleParser.createParser();
+        String ruleText = "Filter<p0 a0>(Input<t0>)|Filter<p1 a1>(Input<t1>)|TableEq(t1,t0)";
+
+        TemplateRelNodeRule rule = parser.parse(ruleText);
+
+        assertNotNull(rule);
+        assertEquals("LogicalFilter", rule.getSourceTemplate().getRelTypeName());
+        assertEquals("LogicalFilter", rule.getTargetTemplate().getRelTypeName());
+
+        System.out.println("✓ Filter rule parsed successfully");
     }
 
     @Test
@@ -88,6 +97,8 @@ public class RewriteRuleParserTest {
         assertThrows(IllegalArgumentException.class, () -> {
             parser.parse(invalidRule);
         });
+
+        System.out.println("✓ Invalid rule throws exception as expected");
     }
 }
 

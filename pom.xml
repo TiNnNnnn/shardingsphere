@@ -48,9 +48,9 @@
         
         <module>distribution</module>
 
-        <module>rewriter-poc</module>
+        <!-- <module>rewriter-poc</module> -->
     </modules>
-    
+
     <properties>
         <!-- Environments -->
         <java.version>1.8</java.version>

@@ -18,21 +18,27 @@
 package org.apache.shardingsphere.sqlfederation.autorewriter;
 
 import lombok.RequiredArgsConstructor;
+import org.apache.calcite.plan.RelOptCluster;
+import org.apache.calcite.plan.RelOptPlanner;
+import org.apache.calcite.plan.hep.HepPlanner;
+import org.apache.calcite.plan.hep.HepProgramBuilder;
+import org.apache.calcite.rex.RexBuilder;
 import org.apache.shardingsphere.sql.parser.api.ASTNode;
 import org.apache.shardingsphere.sql.parser.engine.rewriter.visitor.statement.RewriterStatementVisitorFacade;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.RewriteRuleSegment;
-import org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template.TemplateSqlNodeConverter;
-import org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template.TemplateRewriteRule;
+import org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template.TemplateRelNodeBuilder;
+import org.apache.shardingsphere.sqlfederation.compiler.sql.ast.template.TemplateRelNodeRule;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 
 /**
  * Rewrite rule parser.
- * Parses rewrite rule strings into TemplateRewriteRule objects that can be used for query rewriting.
+ * Parses rewrite rule strings into TemplateRelNodeRule objects that can be used for query rewriting.
+ *
+ * <p>This parser uses TemplateRelNodeBuilder to directly construct RelNode templates,
+ * which is simpler and more efficient than going through SqlNode conversion.</p>
  *
  * <p>Example rule format:
  * {@code Proj*<a0 s0>(Input<t0>)|Proj<a1 s1>(Input<t1>)|TableEq(t1,t0);AttrsEq(a1,a0);SchemaEq(s1,s0)}
@@ -43,13 +49,15 @@ public class RewriteRuleParser {
 
     private final RewriterStatementVisitorFacade visitorFacade;
 
+    private final RelOptCluster cluster;
+
     /**
      * Parse a single rewrite rule from string.
      *
      * @param ruleText rewrite rule text in format: source|target|constraints
-     * @return parsed template rewrite rule
+     * @return parsed template rewrite rule (RelNode version)
      */
-    public TemplateRewriteRule parse(final String ruleText) {
+    public TemplateRelNodeRule parse(final String ruleText) {
         // Step 1: Parse rule text to AST using ANTLR4
         ASTNode astNode = visitorFacade.parseRule(ruleText);
 
@@ -59,8 +67,8 @@ public class RewriteRuleParser {
         }
         RewriteRuleSegment ruleSegment = (RewriteRuleSegment) astNode;
 
-        // Step 3: Convert RewriteRuleSegment to TemplateRewriteRule (SqlNode format)
-        return TemplateSqlNodeConverter.convert(ruleSegment);
+        // Step 3: Convert RewriteRuleSegment to TemplateRelNodeRule (directly build RelNode)
+        return TemplateRelNodeBuilder.buildRule(ruleSegment, cluster);
     }
 
     /**
@@ -100,11 +108,22 @@ public class RewriteRuleParser {
     }
 
     /**
-     * Create a default RewriteRuleParser instance.
+     * Create a default RewriteRuleParser instance with default RelOptCluster.
      *
      * @return new parser instance
      */
     public static RewriteRuleParser createParser() {
-        return new RewriteRuleParser(new RewriterStatementVisitorFacade());
+        return new RewriteRuleParser(new RewriterStatementVisitorFacade(), createDefaultCluster());
+    }
+
+    /**
+     * Create RelOptCluster for building RelNodes.
+     */
+    private static RelOptCluster createDefaultCluster() {
+        RelOptPlanner planner = new HepPlanner(new HepProgramBuilder().build());
+        org.apache.calcite.jdbc.JavaTypeFactoryImpl typeFactory = new org.apache.calcite.jdbc.JavaTypeFactoryImpl(
+                org.apache.calcite.rel.type.RelDataTypeSystem.DEFAULT);
+        RexBuilder rexBuilder = new RexBuilder(typeFactory);
+        return RelOptCluster.create(planner, rexBuilder);
     }
 }
