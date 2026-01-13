@@ -19,6 +19,7 @@ package org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import org.apache.shardingsphere.sql.parser.api.ASTNode;
 
 import java.util.Collection;
@@ -35,5 +36,12 @@ public final class RewriteRuleSegment implements ASTNode {
     private final ASTNode target;
 
     private final Collection<ASTNode> constraints;
+
+    @Setter
+    private String sourceTemplateString;
+
+    @Setter
+    private String targetTemplateString;
+
 }
 

@@ -17,6 +17,7 @@
 
 package org.apache.shardingsphere.sql.parser.engine.rewriter.visitor.statement;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.shardingsphere.sql.parser.api.ASTNode;
 import org.apache.shardingsphere.sql.parser.autogen.RewriterStatementBaseVisitor;
 import org.apache.shardingsphere.sql.parser.autogen.RewriterStatementParser;
@@ -46,6 +47,7 @@ import java.util.stream.Collectors;
 /**
  * Rewriter statement visitor.
  */
+@Slf4j
 public final class RewriterStatementVisitor extends RewriterStatementBaseVisitor<ASTNode> {
 
     @Override
@@ -55,7 +57,10 @@ public final class RewriterStatementVisitor extends RewriterStatementBaseVisitor
         ASTNode targetTemplate = visit(ctx.template(1));
         Collection<ASTNode> constraints = getConstraintSet(ctx.constraintSet());
         // Return a composite structure - implementation specific
-        return new RewriteRuleSegment(sourceTemplate, targetTemplate, constraints);
+        RewriteRuleSegment rewriteRuleSegment =  new RewriteRuleSegment(sourceTemplate, targetTemplate, constraints);
+        rewriteRuleSegment.setSourceTemplateString(ctx.template(0).getText());
+        rewriteRuleSegment.setTargetTemplateString(ctx.template(1).getText());
+        return rewriteRuleSegment;
     }
 
     @Override

@@ -37,12 +37,18 @@ public class RewriteRuleParserTest {
         assertNotNull(rule);
         assertNotNull(rule.getSourceTemplate());
         assertNotNull(rule.getTargetTemplate());
-        assertNotNull(rule.getConstraints());
-        assertEquals(3, rule.getConstraints().size());
+        assertNotNull(rule.getMatchConstraints());
+        assertNotNull(rule.getRewriteConstraints());
+
+        // All 3 constraints are rewrite constraints (TableEq, AttrsEq, SchemaEq)
+        assertEquals(0, rule.getMatchConstraints().size(), "No match constraints expected");
+        assertEquals(3, rule.getRewriteConstraints().size(), "Should have 3 rewrite constraints");
 
         System.out.println("✓ Simple projection rule parsed successfully");
         System.out.println("  Source: " + rule.getSourceTemplate().getRelTypeName());
         System.out.println("  Target: " + rule.getTargetTemplate().getRelTypeName());
+        System.out.println("  Match Constraints: " + rule.getMatchConstraints().size());
+        System.out.println("  Rewrite Constraints: " + rule.getRewriteConstraints().size());
     }
 
     @Test
@@ -99,6 +105,31 @@ public class RewriteRuleParserTest {
         });
 
         System.out.println("✓ Invalid rule throws exception as expected");
+    }
+
+    @Test
+    public void testConstraintClassification() {
+        RewriteRuleParser parser = RewriteRuleParser.createParser();
+
+        // Rule with both match and rewrite constraints
+        String ruleText = "Proj<a0 s0>(Input<t0>)|Proj<a1 s1>(Input<t1>)|"
+                + "AttrsSub(a0,t0);Unique(t0,a0);TableEq(t1,t0);AttrsEq(a1,a0);SchemaEq(s1,s0)";
+
+        TemplateRelNodeRule rule = parser.parse(ruleText);
+
+        assertNotNull(rule);
+
+        // Match constraints: AttrsSub, Unique (only source template parameters)
+        assertEquals(2, rule.getMatchConstraints().size(),
+                "Should have 2 match constraints: AttrsSub and Unique");
+
+        // Rewrite constraints: TableEq, AttrsEq, SchemaEq (cross-template parameters)
+        assertEquals(3, rule.getRewriteConstraints().size(),
+                "Should have 3 rewrite constraints: TableEq, AttrsEq, SchemaEq");
+
+        System.out.println("✓ Constraint classification test passed");
+        System.out.println("  Match Constraints (source only): " + rule.getMatchConstraints().size());
+        System.out.println("  Rewrite Constraints (cross-template): " + rule.getRewriteConstraints().size());
     }
 }
 

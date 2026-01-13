@@ -327,4 +327,98 @@ public class TemplateRelNodeBuilderTest {
         System.out.println("✓ InSubFilter (semi-join) rule test completed");
         System.out.println("Note: InSubFilter<a2>(L, R) means: keep rows from L where L.a2 IN (SELECT a2 FROM R)");
     }
+
+    @Test
+    public void testComplexNestedJoinWithProjectionRule() {
+        System.out.println("\n=== Test: Complex Nested Join with Projection Rule ===");
+        String rule = "LeftJoin<a1 a2>(Proj*<a0 s0>(Input<t0>),Input<t1>)|" +
+                "InnerJoin<a4 a5>(Proj<a3 s1>(Input<t2>),Input<t3>)|" +
+                "TableEq(t0,t1);AttrsEq(a1,a2);AttrsSub(a0,t0);AttrsSub(a1,s0);AttrsSub(a2,t1);" +
+                "Unique(t1,a2);NotNull(t1,a2);TableEq(t2,t0);TableEq(t3,t1);AttrsEq(a3,a0);" +
+                "AttrsEq(a4,a1);AttrsEq(a5,a2);SchemaEq(s1,s0)";
+        System.out.println("Rule: " + rule);
+        // 1. Parse rule
+        RewriterStatementVisitorFacade facade = new RewriterStatementVisitorFacade();
+        ASTNode astNode = facade.parseRule(rule);
+        assertNotNull(astNode, "AST node should not be null");
+        assertTrue(astNode instanceof RewriteRuleSegment, "AST should be RewriteRuleSegment");
+
+        RewriteRuleSegment ruleSegment = (RewriteRuleSegment) astNode;
+        System.out.println("✓ Rule parsed successfully");
+
+        // 2. Build RelNode
+        RelOptCluster cluster = createCluster();
+        TemplateRelNodeRule templateRule = TemplateRelNodeBuilder.buildRule(ruleSegment, cluster);
+
+        assertNotNull(templateRule, "Template rule should not be null");
+        assertNotNull(templateRule.getSourceTemplate(), "Source template should not be null");
+        assertNotNull(templateRule.getTargetTemplate(), "Target template should not be null");
+
+        System.out.println("✓ RelNode templates built successfully");
+
+        // 3. Verify source template structure
+        RelNode sourceTemplate = templateRule.getSourceTemplate();
+        System.out.println("\n--- Source Template Structure ---");
+        System.out.println("Type: " + sourceTemplate.getRelTypeName());
+        System.out.println("Row Type: " + sourceTemplate.getRowType());
+        System.out.println("Field Count: " + sourceTemplate.getRowType().getFieldCount());
+        System.out.println("\nRelNode Tree:");
+        System.out.println(sourceTemplate.explain());
+
+        // Should be a LeftJoin at root
+        assertEquals("LogicalJoin", sourceTemplate.getRelTypeName(),
+                "Source template root should be LogicalJoin");
+
+        // Left child should be Aggregate (for DISTINCT from Proj*) or Project
+        RelNode leftChild = sourceTemplate.getInput(0);
+        System.out.println("\nLeft child type: " + leftChild.getRelTypeName());
+        assertTrue(leftChild.getRelTypeName().contains("Aggregate") || leftChild.getRelTypeName().contains("Project"),
+                "Left child should be Aggregate (DISTINCT) or Project");
+
+        // Right child should be TableScan
+        RelNode rightChild = sourceTemplate.getInput(1);
+        System.out.println("Right child type: " + rightChild.getRelTypeName());
+        assertEquals("LogicalTableScan", rightChild.getRelTypeName(),
+                "Right child should be TableScan");
+
+        // 4. Verify target template structure
+        RelNode targetTemplate = templateRule.getTargetTemplate();
+        System.out.println("\n--- Target Template Structure ---");
+        System.out.println("Type: " + targetTemplate.getRelTypeName());
+        System.out.println("\nRelNode Tree:");
+        System.out.println(targetTemplate.explain());
+
+        // Should be an InnerJoin at root
+        assertEquals("LogicalJoin", targetTemplate.getRelTypeName(),
+                "Target template root should be LogicalJoin");
+
+        // 5. Convert to SQL
+        String sourceSQL = relNodeToSql(sourceTemplate);
+        String targetSQL = relNodeToSql(targetTemplate);
+
+        System.out.println("\n--- Generated SQL ---");
+        System.out.println("Source SQL: " + sourceSQL);
+        System.out.println("Target SQL: " + targetSQL);
+
+        // 6. Verify SQL contains expected elements
+        assertNotNull(sourceSQL, "Source SQL should not be null");
+        assertNotNull(targetSQL, "Target SQL should not be null");
+
+        // Source should have LEFT JOIN
+        assertTrue(sourceSQL.toUpperCase().contains("LEFT") || sourceSQL.toUpperCase().contains("JOIN"),
+                "Source SQL should contain LEFT JOIN");
+
+        // 7. Verify constraints classification
+        System.out.println("\n--- Constraints Classification ---");
+        System.out.println("Match Constraints (source only): " + templateRule.getMatchConstraints().size());
+        System.out.println("Rewrite Constraints (cross-template): " + templateRule.getRewriteConstraints().size());
+
+        // AttrsSub (x3) and NotNull (x1) are match constraints = 4
+        // TableEq, AttrsEq, SchemaEq are rewrite constraints = 8
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        System.out.println("Total Constraints: " + totalConstraints);
+        assertEquals(13, totalConstraints, "Should have 12 constraints total");
+        assertFalse(sourceSQL.toUpperCase().contains("ON TRUE") && !sourceSQL.contains("Error"),
+                "Join condition should not be 'ON TRUE' - attributes should be found via findFieldIndexRecursive");
+    }
 }

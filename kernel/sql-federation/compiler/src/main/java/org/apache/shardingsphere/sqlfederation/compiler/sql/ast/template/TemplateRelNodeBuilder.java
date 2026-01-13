@@ -36,27 +36,43 @@ import org.apache.shardingsphere.sql.parser.statement.core.segment.dml.column.Co
 import org.apache.shardingsphere.sql.parser.statement.core.segment.dml.item.ColumnProjectionSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.dml.item.ProjectionSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.generic.table.SimpleTableSegment;
+import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintSegment;
+import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.ConstraintType;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.RewriteRuleSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateFilterSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateInSubFilterSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateJoinSegment;
 import org.apache.shardingsphere.sql.parser.statement.core.segment.rewriter.TemplateProjectionSegment;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 /**
- * Template RelNode builder - directly constructs RelNode from AST.
- *
- * This approach is simpler than SqlNode conversion because:
- * 1. No need for SqlValidator (no schema validation)
- * 2. No need for virtual schema creation
- * 3. More direct mapping from template AST to RelNode
+ * Template RelNode builder from rewrite rule segment.
  */
 @Slf4j
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
 public final class TemplateRelNodeBuilder {
+
+    private static final ThreadLocal<Collection<ASTNode>> currentMatchConstraints = new ThreadLocal<>();
+    private static final ThreadLocal<Collection<ASTNode>> currentRewriteConstraints = new ThreadLocal<>();
+    private static final ThreadLocal<Map<String, Integer>> attrToParamIndexMap = ThreadLocal.withInitial(HashMap::new);
+    private static final ThreadLocal<Integer> paramIndexCounter = ThreadLocal.withInitial(() -> 0);
+
+    /**
+     * Get or create parameter index for an attribute name.
+     * This is used for RexDynamicParam placeholders.
+     */
+    private static int getOrCreateParamIndex(final String attrName) {
+        Map<String, Integer> map = attrToParamIndexMap.get();
+        return map.computeIfAbsent(attrName, k -> {
+            int index = paramIndexCounter.get();
+            paramIndexCounter.set(index + 1);
+            return index;
+        });
+    }
+
+    private static final ThreadLocal<String> sourceTemplateString = new ThreadLocal<>();
+    private static final ThreadLocal<String> targetTemplateString = new ThreadLocal<>();
 
     /**
      * Build template RelNode from rewrite rule segment.
@@ -66,9 +82,105 @@ public final class TemplateRelNodeBuilder {
      * @return template rewrite rule with RelNodes
      */
     public static TemplateRelNodeRule buildRule(final RewriteRuleSegment ruleSegment, final RelOptCluster cluster) {
-        RelNode sourceTemplate = buildRelNode(ruleSegment.getSource(), cluster);
-        RelNode targetTemplate = buildRelNode(ruleSegment.getTarget(), cluster);
-        return new TemplateRelNodeRule(sourceTemplate, targetTemplate, ruleSegment.getConstraints());
+        // Store template strings from RewriteRuleSegment for constraint classification
+        sourceTemplateString.set(ruleSegment.getSourceTemplateString());
+        targetTemplateString.set(ruleSegment.getTargetTemplateString());
+
+        try {
+            // Split constraints into two categories
+            Collection<ASTNode> matchConstraints = new ArrayList<>();
+            Collection<ASTNode> rewriteConstraints = new ArrayList<>();
+
+            for (ASTNode constraint : ruleSegment.getConstraints()) {
+                if (isMatchConstraint(constraint)) {
+                    matchConstraints.add(constraint);
+                } else {
+                    rewriteConstraints.add(constraint);
+                }
+            }
+
+            // Store constraints in ThreadLocal for access during RelNode building
+            currentMatchConstraints.set(matchConstraints);
+            currentRewriteConstraints.set(rewriteConstraints);
+
+            // Build RelNodes with constraints available
+            RelNode sourceTemplate = buildRelNode(ruleSegment.getSource(), cluster);
+            RelNode targetTemplate = buildRelNode(ruleSegment.getTarget(), cluster);
+            return new TemplateRelNodeRule(sourceTemplate, targetTemplate, matchConstraints, rewriteConstraints);
+        } finally {
+            currentMatchConstraints.remove();
+            currentRewriteConstraints.remove();
+            sourceTemplateString.remove();
+            targetTemplateString.remove();
+        }
+    }
+
+    /**
+     * Check if a constraint is a match constraint (all parameters from source template only).
+     *
+     * Strategy: String matching - check if all constraint parameters appear in source template string.
+     */
+    private static boolean isMatchConstraint(final ASTNode constraint) {
+        if (!(constraint instanceof ConstraintSegment)) {
+            return false;
+        }
+
+        ConstraintSegment constraintSegment = (ConstraintSegment) constraint;
+        String[] params = constraintSegment.getParams();
+
+        if (params == null || params.length == 0) {
+            return false;
+        }
+
+        String sourceStr = sourceTemplateString.get();
+        if (sourceStr == null) {
+            return false;
+        }
+
+        // Check if ALL parameters can be found in source template string
+        for (String param : params) {
+            if (!sourceStr.contains(param)) {
+                // This parameter is not in source template, so it's a cross-template constraint
+                return false;
+            }
+        }
+
+        // All parameters found in source template
+        return true;
+    }
+
+    /**
+     * Extract numeric index from parameter name.
+     * Example: a0 -> 0, a1 -> 1, t0 -> 0, s0 -> 0
+     * Returns -1 if not a valid parameter name.
+     */
+    private static int extractIndexFromParam(final String param) {
+        if (param != null && param.length() > 1 && param.matches("[ats]\\d+")) {
+            return Integer.parseInt(param.substring(1));
+        }
+        return -1;
+    }
+
+    /**
+     * Create a simple attribute reference for template matching.
+     * This creates a RexInputRef using the attribute name's index directly,
+     * which will be displayed as the attribute name (e.g., "a0", "a1") in SQL
+     * without table prefixes.
+     *
+     * @param attrName attribute name (e.g., "a0", "a1")
+     * @param cluster RelOptCluster
+     * @return RexNode representing the attribute
+     */
+    private static RexNode makeAttributeRef(final String attrName, final RelOptCluster cluster) {
+        int attrIndex = extractIndexFromParam(attrName);
+        if (attrIndex < 0) {
+            throw new IllegalArgumentException("Invalid attribute name: " + attrName);
+        }
+        // Create RexInputRef with flexible ANY type and use attribute index directly
+        return cluster.getRexBuilder().makeInputRef(
+                cluster.getTypeFactory().createSqlType(org.apache.calcite.sql.type.SqlTypeName.ANY),
+                attrIndex
+        );
     }
 
     /**
@@ -113,7 +225,6 @@ public final class TemplateRelNodeBuilder {
         RelNode input = buildRelNode(segment.getChild(), cluster);
 
         // 2. build projection expressions
-        RexBuilder rexBuilder = cluster.getRexBuilder();
         List<RexNode> projects = new ArrayList<>();
         List<String> fieldNames = new ArrayList<>();
 
@@ -131,16 +242,10 @@ public final class TemplateRelNodeBuilder {
                     continue;
                 }
 
-                int fieldIndex = findFieldIndex(input, columnName);
-                if (fieldIndex >= 0) {
-                    projects.add(rexBuilder.makeInputRef(input, fieldIndex));
-                    fieldNames.add(columnName);
-                    log.info("Column '{}' found in input, adding to projection.", columnName);
-                } else {
-                    projects.add(rexBuilder.makeLiteral(columnName));
-                    fieldNames.add(columnName);
-                    log.warn("Column '{}' not found in input, using placeholder.", columnName);
-                }
+                // Create simple attribute reference without table prefix
+                projects.add(makeAttributeRef(columnName, cluster));
+                fieldNames.add(columnName);
+                log.info("Projection: attribute '{}'", columnName);
             } else {
                 throw new UnsupportedOperationException("Unsupported projection segment: " + projSegment.getClass().getName());
             }
@@ -201,25 +306,22 @@ public final class TemplateRelNodeBuilder {
         RexBuilder rexBuilder = cluster.getRexBuilder();
         String leftAttr = segment.getLeftAttribute();   // a1
         String rightAttr = segment.getRightAttribute(); // a2
-        int leftFieldIndex = findFieldIndex(left, leftAttr);
-        int rightFieldIndex = findFieldIndex(right, rightAttr);
 
-        RexNode condition;
-        if (leftFieldIndex >= 0 && rightFieldIndex >= 0) {
-            // create L.a1 = R.a2
-            RexNode leftRef = rexBuilder.makeInputRef(left, leftFieldIndex);
-            RexNode rightRef = rexBuilder.makeInputRef(
-                    right.getRowType().getFieldList().get(rightFieldIndex).getType(),
-                    left.getRowType().getFieldCount() + rightFieldIndex
-            );
-            condition = rexBuilder.makeCall(
-                    org.apache.calcite.sql.fun.SqlStdOperatorTable.EQUALS,
-                    leftRef,
-                    rightRef
-            );
-        } else {
-            condition = rexBuilder.makeLiteral(true);
-        }
+        log.info("Building join with attributes: {} = {}", leftAttr, rightAttr);
+
+        // Create simple attribute references without table prefixes
+        // This will display as "a1 = a2" in SQL, not "table.a1 = table.a2"
+        RexNode leftRef = makeAttributeRef(leftAttr, cluster);
+        RexNode rightRef = makeAttributeRef(rightAttr, cluster);
+
+        RexNode condition = rexBuilder.makeCall(
+                org.apache.calcite.sql.fun.SqlStdOperatorTable.EQUALS,
+                leftRef,
+                rightRef
+        );
+
+        log.info("Join condition created: {} = {}", leftAttr, rightAttr);
+
         JoinRelType joinType = parseJoinType(segment.getJoinType());
         return LogicalJoin.create(
                 left,
@@ -264,7 +366,7 @@ public final class TemplateRelNodeBuilder {
             RexNode predicateCall = buildPredicateCall(
                     condition.predicate,
                     condition.attribute,
-                    input,
+                    cluster,
                     rexBuilder
             );
             conditionNodes.add(predicateCall);
@@ -288,22 +390,15 @@ public final class TemplateRelNodeBuilder {
      *
      * @param predicateName predicate function name (p0, p1, ...)
      * @param attributeName attribute name (a0, a1, ...)
-     * @param input input RelNode
+     * @param cluster RelOptCluster
      * @param rexBuilder RexBuilder
      * @return RexNode representing p(a)
      */
     private static RexNode buildPredicateCall(final String predicateName, final String attributeName,
-                                               final RelNode input, final RexBuilder rexBuilder) {
-        // 查找属性在 input 中的索引
-        int fieldIndex = findFieldIndex(input, attributeName);
-
-        RexNode attrRef;
-        if (fieldIndex >= 0) {
-            // crete attribute reference
-            attrRef = rexBuilder.makeInputRef(input, fieldIndex);
-        } else {
-            throw new IllegalArgumentException("Attribute '" + attributeName + "' not found in input for predicate '" + predicateName + "'");
-        }
+                                               final RelOptCluster cluster, final RexBuilder rexBuilder) {
+        // Create simple attribute reference without table prefix
+        RexNode attrRef = makeAttributeRef(attributeName, cluster);
+        log.info("Filter predicate: attribute '{}'", attributeName);
 
         // create predicate function call p(attrRef)
         org.apache.calcite.sql.SqlOperator predicateOperator = new org.apache.calcite.sql.SqlUnresolvedFunction(
@@ -347,41 +442,32 @@ public final class TemplateRelNodeBuilder {
 
         // 2. get filter attribute
         String filterAttr = segment.getAttribute(); // a2
-        int leftFieldIndex = findFieldIndex(leftInput, filterAttr);
 
-        RexBuilder rexBuilder = cluster.getRexBuilder();
-        RexNode condition;
 
-        if (leftFieldIndex >= 0) {
-            // create left attribute reference: L.a2
-            RexNode leftRef = rexBuilder.makeInputRef(leftInput, leftFieldIndex);
+        // Create simple attribute references without table prefixes
+        RexNode leftRef = makeAttributeRef(filterAttr, cluster);
+        RexNode rightProject = makeAttributeRef(filterAttr, cluster);
 
-            // find right attribute index
-            int rightFieldIndex = findFieldIndex(rightInput, filterAttr);
-            if (rightFieldIndex >= 0) {
-                // build right projection: SELECT a2 FROM R
-                List<RexNode> rightProjects = Collections.singletonList(
-                        rexBuilder.makeInputRef(rightInput, rightFieldIndex)
-                );
-                List<String> rightFieldNames = Collections.singletonList(filterAttr);
-                RelNode rightProjection = LogicalProject.create(
-                        rightInput,
-                        Collections.emptyList(),
-                        rightProjects,
-                        rightFieldNames
-                );
+        log.info("InSubFilter: attribute '{}'", filterAttr);
 
-                // create IN subquery：L.a2 IN (SELECT a2 FROM R)
-                condition = org.apache.calcite.rex.RexSubQuery.in(
-                        rightProjection,
-                        com.google.common.collect.ImmutableList.of(leftRef)
-                );
-            } else {
-                throw new IllegalArgumentException("Attribute '" + filterAttr + "' not found in subquery for InSubFilter.");
-            }
-        } else {
-            throw new IllegalArgumentException("Attribute '" + filterAttr + "' not found in left input for InSubFilter.");
-        }
+        // Build right projection: SELECT a2 FROM R
+        List<RexNode> rightProjects = Collections.singletonList(rightProject);
+        List<String> rightFieldNames = Collections.singletonList(filterAttr);
+        RelNode rightProjection = LogicalProject.create(
+                rightInput,
+                Collections.emptyList(),
+                rightProjects,
+                rightFieldNames
+        );
+
+        // Create IN subquery：L.a2 IN (SELECT a2 FROM R)
+        RexNode condition = org.apache.calcite.rex.RexSubQuery.in(
+                rightProjection,
+                com.google.common.collect.ImmutableList.of(leftRef)
+        );
+
+        log.info("InSubFilter condition created: {} IN (subquery)", filterAttr);
+
         return LogicalFilter.create(leftInput, condition);
     }
 

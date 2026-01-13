@@ -66,7 +66,6 @@ public class RewriteRuleParser {
             throw new IllegalArgumentException("Invalid rule format: " + ruleText);
         }
         RewriteRuleSegment ruleSegment = (RewriteRuleSegment) astNode;
-
         // Step 3: Convert RewriteRuleSegment to TemplateRelNodeRule (directly build RelNode)
         return TemplateRelNodeBuilder.buildRule(ruleSegment, cluster);
     }

@@ -88,7 +88,8 @@ public class TemplateSqlNodeConverterTest {
         assertNotNull(templateRule);
         assertNotNull(templateRule.getSourceTemplate());
         assertNotNull(templateRule.getTargetTemplate());
-        assertNotNull(templateRule.getConstraints());
+        assertNotNull(templateRule.getMatchConstraints());
+        assertNotNull(templateRule.getRewriteConstraints());
 
         // 转换为SQL字符串
         String sourceSQL = relNodeToSql(templateRule.getSourceTemplate());
@@ -189,15 +190,18 @@ public class TemplateSqlNodeConverterTest {
         RelOptCluster cluster = createCluster();
         TemplateRelNodeRule templateRule = TemplateRelNodeBuilder.buildRule(ruleSegment, cluster);
 
-        // 验证约束数量
-        assertEquals(5, templateRule.getConstraints().size());
+        // 验证约束数量：AttrsSub, Unique (match) + TableEq, AttrsEq, SchemaEq (rewrite)
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        assertEquals(5, totalConstraints, "Should have 5 constraints total");
 
         String sourceSQL = relNodeToSql(templateRule.getSourceTemplate());
         String targetSQL = relNodeToSql(templateRule.getTargetTemplate());
 
         System.out.println("Rule with Constraints - Source SQL: " + sourceSQL);
         System.out.println("Rule with Constraints - Target SQL: " + targetSQL);
-        System.out.println("Number of Constraints: " + templateRule.getConstraints().size());
+        System.out.println("Number of Match Constraints: " + templateRule.getMatchConstraints().size());
+        System.out.println("Number of Rewrite Constraints: " + templateRule.getRewriteConstraints().size());
+        System.out.println("Total Constraints: " + totalConstraints);
 
         assertNotNull(sourceSQL);
         assertNotNull(targetSQL);
@@ -309,8 +313,9 @@ public class TemplateSqlNodeConverterTest {
         assertTrue(targetSQL.contains("a7"), "Target should contain join attribute a7");
         assertTrue(targetSQL.contains("a8"), "Target should contain join attribute a8");
 
-        // 验证约束数量
-        assertEquals(3, templateRule.getConstraints().size(), "Should have 3 table equality constraints");
+        // 验证约束数量：3个TableEq都是rewrite constraints
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        assertEquals(3, totalConstraints, "Should have 3 table equality constraints");
 
         System.out.println("Three table join test passed! SQL structure:");
         System.out.println("- Contains " + joinCount + " JOIN operations");
@@ -361,8 +366,9 @@ public class TemplateSqlNodeConverterTest {
         assertTrue(targetSQL.contains("SELECT"), "Target should contain SELECT");
         assertTrue(targetSQL.contains("t2"), "Target should contain main table t2");
 
-        // 验证约束数量
-        assertEquals(4, templateRule.getConstraints().size(), "Should have 4 constraints");
+        // 验证约束数量：4个都是rewrite constraints (TableEq, AttrsEq)
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        assertEquals(4, totalConstraints, "Should have 4 constraints");
 
         System.out.println("IN SubQuery Filter test passed!");
         System.out.println("- Semi-join semantics implemented");
@@ -396,8 +402,9 @@ public class TemplateSqlNodeConverterTest {
         assertTrue(sourceSQL.contains("t0") || sourceSQL.contains("t1") || sourceSQL.contains("t2"),
                 "Source should contain at least one of the tables");
 
-        // 验证约束数量
-        assertEquals(5, templateRule.getConstraints().size(), "Should have 5 constraints");
+        // 验证约束数量：5个都是rewrite constraints
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        assertEquals(5, totalConstraints, "Should have 5 constraints");
 
         System.out.println("Nested InSubFilter test passed!");
     }
@@ -431,8 +438,9 @@ public class TemplateSqlNodeConverterTest {
         // 验证包含表
         assertTrue(sourceSQL.contains("t0"), "Source should contain main table t0");
 
-        // 验证约束数量
-        assertEquals(4, templateRule.getConstraints().size(), "Should have 4 constraints");
+        // 验证约束数量：4个都是rewrite constraints
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        assertEquals(4, totalConstraints, "Should have 4 constraints");
 
         System.out.println("InSubFilter wrapped by Projection test passed!");
     }
@@ -471,8 +479,9 @@ public class TemplateSqlNodeConverterTest {
         assertTrue(targetSQL.contains("SELECT"), "Target should contain SELECT");
         assertTrue(targetSQL.toUpperCase().contains("WHERE"), "Target should contain WHERE clause");
 
-        // 验证约束数量
-        assertEquals(7, templateRule.getConstraints().size(), "Should have 7 constraints");
+        // 验证约束数量：AttrsSub x2 (match) + AttrsEq x2, PredicateEq x2, TableEq x1 (rewrite) = 7 total
+        int totalConstraints = templateRule.getMatchConstraints().size() + templateRule.getRewriteConstraints().size();
+        assertEquals(7, totalConstraints, "Should have 7 constraints");
 
         System.out.println("Nested Filter test passed!");
         System.out.println("- Nested filter structure implemented");
