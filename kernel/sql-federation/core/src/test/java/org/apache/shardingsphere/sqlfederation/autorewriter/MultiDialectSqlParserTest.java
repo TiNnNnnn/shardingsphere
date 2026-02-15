@@ -52,4 +52,17 @@ public class MultiDialectSqlParserTest {
         System.out.println("  SQL: " + sql);
         System.out.println("  Parsed SqlNode: " + sqlNode);
     }
+
+    @Test
+    public void testParsePostgreSQLCreateTableStatement() {
+        MultiDialectSqlParser parser = MultiDialectSqlParser.createParser("PostgreSQL");
+        String sql = "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, age INTEGER, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)";
+
+        SqlNode sqlNode = parser.parse(sql);
+
+        assertNotNull(sqlNode);
+        System.out.println("✓ PostgreSQL CREATE TABLE statement parsed successfully");
+        System.out.println("  SQL: " + sql);
+        System.out.println("  Parsed SqlNode: " + sqlNode);
+    }
 }

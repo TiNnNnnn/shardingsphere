@@ -232,6 +232,7 @@ public final class TemplateRelNodeBuilder {
         boolean isDistinct = "Proj*".equals(segment.getOperator());
 
         // Proj<a0, a1, ...> or  Proj*<a0, a1, ...>
+        int projectionIndex = 0;
         for (ProjectionSegment projSegment : segment.getProjections()) {
             if (projSegment instanceof ColumnProjectionSegment) {
                 ColumnSegment column = ((ColumnProjectionSegment) projSegment).getColumn();
@@ -242,10 +243,27 @@ public final class TemplateRelNodeBuilder {
                     continue;
                 }
 
-                // Create simple attribute reference without table prefix
-                projects.add(makeAttributeRef(columnName, cluster));
+                // For template projections, map attribute to input field
+                // Try to find the field in input by name first
+                int inputFieldIndex = findFieldIndex(input, columnName);
+
+                // If not found by name, use sequential mapping (projectionIndex maps to input field)
+                if (inputFieldIndex < 0) {
+                    inputFieldIndex = Math.min(projectionIndex, input.getRowType().getFieldCount() - 1);
+                    log.warn("Field '{}' not found in input, using sequential index {}", columnName, inputFieldIndex);
+                }
+
+                // Create reference to the actual field in input
+                RexNode projectExpr = cluster.getRexBuilder().makeInputRef(
+                        input.getRowType().getFieldList().get(inputFieldIndex).getType(),
+                        inputFieldIndex
+                );
+
+                projects.add(projectExpr);
                 fieldNames.add(columnName);
-                log.info("Projection: attribute '{}'", columnName);
+                log.info("Projection: attribute '{}' -> input field index {}", columnName, inputFieldIndex);
+
+                projectionIndex++;
             } else {
                 throw new UnsupportedOperationException("Unsupported projection segment: " + projSegment.getClass().getName());
             }
@@ -366,6 +384,7 @@ public final class TemplateRelNodeBuilder {
             RexNode predicateCall = buildPredicateCall(
                     condition.predicate,
                     condition.attribute,
+                    input,
                     cluster,
                     rexBuilder
             );
@@ -390,15 +409,33 @@ public final class TemplateRelNodeBuilder {
      *
      * @param predicateName predicate function name (p0, p1, ...)
      * @param attributeName attribute name (a0, a1, ...)
+     * @param input input RelNode to get field from
      * @param cluster RelOptCluster
      * @param rexBuilder RexBuilder
      * @return RexNode representing p(a)
      */
     private static RexNode buildPredicateCall(final String predicateName, final String attributeName,
-                                               final RelOptCluster cluster, final RexBuilder rexBuilder) {
-        // Create simple attribute reference without table prefix
-        RexNode attrRef = makeAttributeRef(attributeName, cluster);
-        log.info("Filter predicate: attribute '{}'", attributeName);
+                                               final RelNode input, final RelOptCluster cluster, final RexBuilder rexBuilder) {
+        // Find the field in input by name
+        int fieldIndex = findFieldIndex(input, attributeName);
+        if (fieldIndex < 0) {
+            // If not found by name, try to extract index from attribute name and use it if valid
+            int attrIndex = extractIndexFromParam(attributeName);
+            if (attrIndex >= 0 && attrIndex < input.getRowType().getFieldCount()) {
+                fieldIndex = attrIndex;
+            } else {
+                // Fallback to first field
+                fieldIndex = 0;
+            }
+            log.warn("Field '{}' not found in input, using index {}", attributeName, fieldIndex);
+        }
+
+        // Create reference to the actual field in input
+        RexNode attrRef = rexBuilder.makeInputRef(
+                input.getRowType().getFieldList().get(fieldIndex).getType(),
+                fieldIndex
+        );
+        log.info("Filter predicate: attribute '{}' -> input field index {}", attributeName, fieldIndex);
 
         // create predicate function call p(attrRef)
         org.apache.calcite.sql.SqlOperator predicateOperator = new org.apache.calcite.sql.SqlUnresolvedFunction(
@@ -441,17 +478,40 @@ public final class TemplateRelNodeBuilder {
         RelNode rightInput = buildRelNode(segment.getSubquery(), cluster);
 
         // 2. get filter attribute
-        String filterAttr = segment.getAttribute(); // a2
-
-
-        // Create simple attribute references without table prefixes
-        RexNode leftRef = makeAttributeRef(filterAttr, cluster);
-        RexNode rightProject = makeAttributeRef(filterAttr, cluster);
+        String filterAttr = segment.getAttribute(); // a1
 
         log.info("InSubFilter: attribute '{}'", filterAttr);
 
-        // Build right projection: SELECT a2 FROM R
-        List<RexNode> rightProjects = Collections.singletonList(rightProject);
+        // Find the field index in leftInput for the filter attribute
+        int leftFieldIndex = findFieldIndex(leftInput, filterAttr);
+        if (leftFieldIndex < 0) {
+            // If not found by name, use the first field as fallback
+            leftFieldIndex = 0;
+            log.warn("Field '{}' not found in leftInput, using index 0", filterAttr);
+        }
+
+        // Create reference to the field in leftInput
+        RexNode leftRef = cluster.getRexBuilder().makeInputRef(
+                leftInput.getRowType().getFieldList().get(leftFieldIndex).getType(),
+                leftFieldIndex
+        );
+
+        // For the right side projection, we need to select from rightInput
+        // We'll select the first field from rightInput (index 0)
+        int rightFieldIndex = findFieldIndex(rightInput, filterAttr);
+        if (rightFieldIndex < 0) {
+            // If not found by name, use the first field
+            rightFieldIndex = 0;
+            log.warn("Field '{}' not found in rightInput, using index 0", filterAttr);
+        }
+
+        RexNode rightProjectExpr = cluster.getRexBuilder().makeInputRef(
+                rightInput.getRowType().getFieldList().get(rightFieldIndex).getType(),
+                rightFieldIndex
+        );
+
+        // Build right projection: SELECT field FROM R
+        List<RexNode> rightProjects = Collections.singletonList(rightProjectExpr);
         List<String> rightFieldNames = Collections.singletonList(filterAttr);
         RelNode rightProjection = LogicalProject.create(
                 rightInput,
@@ -460,7 +520,7 @@ public final class TemplateRelNodeBuilder {
                 rightFieldNames
         );
 
-        // Create IN subquery：L.a2 IN (SELECT a2 FROM R)
+        // Create IN subquery：L.field IN (SELECT field FROM R)
         RexNode condition = org.apache.calcite.rex.RexSubQuery.in(
                 rightProjection,
                 com.google.common.collect.ImmutableList.of(leftRef)
