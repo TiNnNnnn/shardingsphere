@@ -250,7 +250,7 @@ public final class TemplateRelNodeBuilder {
                 // If not found by name, use sequential mapping (projectionIndex maps to input field)
                 if (inputFieldIndex < 0) {
                     inputFieldIndex = Math.min(projectionIndex, input.getRowType().getFieldCount() - 1);
-                    log.warn("Field '{}' not found in input, using sequential index {}", columnName, inputFieldIndex);
+                    log.debug("Field '{}' not found in input, using sequential index {}", columnName, inputFieldIndex);
                 }
 
                 // Create reference to the actual field in input
@@ -427,7 +427,7 @@ public final class TemplateRelNodeBuilder {
                 // Fallback to first field
                 fieldIndex = 0;
             }
-            log.warn("Field '{}' not found in input, using index {}", attributeName, fieldIndex);
+            log.debug("Field '{}' not found in input, using index {}", attributeName, fieldIndex);
         }
 
         // Create reference to the actual field in input
@@ -487,7 +487,7 @@ public final class TemplateRelNodeBuilder {
         if (leftFieldIndex < 0) {
             // If not found by name, use the first field as fallback
             leftFieldIndex = 0;
-            log.warn("Field '{}' not found in leftInput, using index 0", filterAttr);
+            log.debug("Field '{}' not found in leftInput, using index 0", filterAttr);
         }
 
         // Create reference to the field in leftInput
@@ -496,33 +496,33 @@ public final class TemplateRelNodeBuilder {
                 leftFieldIndex
         );
 
-        // For the right side projection, we need to select from rightInput
-        // We'll select the first field from rightInput (index 0)
-        int rightFieldIndex = findFieldIndex(rightInput, filterAttr);
-        if (rightFieldIndex < 0) {
-            // If not found by name, use the first field
-            rightFieldIndex = 0;
-            log.warn("Field '{}' not found in rightInput, using index 0", filterAttr);
+        // Build subquery for IN clause
+        // If rightInput is already single-column (e.g., from an explicit Proj in template), use it directly
+        // Otherwise, wrap with a projection to select the filter attribute column
+        RelNode subquery;
+        if (rightInput.getRowType().getFieldCount() == 1) {
+            subquery = rightInput;
+        } else {
+            int rightFieldIndex = findFieldIndex(rightInput, filterAttr);
+            if (rightFieldIndex < 0) {
+                rightFieldIndex = 0;
+                log.debug("Field '{}' not found in rightInput, using index 0", filterAttr);
+            }
+            RexNode rightProjectExpr = cluster.getRexBuilder().makeInputRef(
+                    rightInput.getRowType().getFieldList().get(rightFieldIndex).getType(),
+                    rightFieldIndex
+            );
+            subquery = LogicalProject.create(
+                    rightInput,
+                    Collections.emptyList(),
+                    Collections.singletonList(rightProjectExpr),
+                    Collections.singletonList(filterAttr)
+            );
         }
 
-        RexNode rightProjectExpr = cluster.getRexBuilder().makeInputRef(
-                rightInput.getRowType().getFieldList().get(rightFieldIndex).getType(),
-                rightFieldIndex
-        );
-
-        // Build right projection: SELECT field FROM R
-        List<RexNode> rightProjects = Collections.singletonList(rightProjectExpr);
-        List<String> rightFieldNames = Collections.singletonList(filterAttr);
-        RelNode rightProjection = LogicalProject.create(
-                rightInput,
-                Collections.emptyList(),
-                rightProjects,
-                rightFieldNames
-        );
-
-        // Create IN subquery：L.field IN (SELECT field FROM R)
+        // Create IN subquery: L.field IN (SELECT field FROM R)
         RexNode condition = org.apache.calcite.rex.RexSubQuery.in(
-                rightProjection,
+                subquery,
                 com.google.common.collect.ImmutableList.of(leftRef)
         );
 
